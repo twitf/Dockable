@@ -127,17 +127,27 @@ public sealed class WindowThumbnailCache : IDisposable
             }
 
             var result = captured;
-            _ = _ui.InvokeAsync(() =>
+            try
             {
-                lock (_gate)
+                _ui.InvokeAsync(() =>
                 {
+                    lock (_gate)
+                    {
+                        _capturing = false;
+                        if (_disposed)
+                            return;
+                        if (result is not null)
+                            Store((IntPtr)hwnd, result);
+                    }
+                });
+            }
+            catch
+            {
+                // The dispatcher is already shutting down: nothing left to store on, and this worker must
+                // not surface an exception of its own during teardown.
+                lock (_gate)
                     _capturing = false;
-                    if (_disposed)
-                        return;
-                    if (result is not null)
-                        Store((IntPtr)hwnd, result);
-                }
-            });
+            }
         });
     }
 
