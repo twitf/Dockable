@@ -2,6 +2,14 @@
 #   - 单一项目 src/Dockable/Dockable.csproj（C# 12 + WPF，net10.0-windows10.0.22621.0，x64，unpackaged）
 #   - 无测试项目、无 .wapproj / MSIX 打包、无代码签名证书
 #   - 产物是仓库自带的 Portable 发布配置生成的单文件 Dockable.exe
+#
+# 2026-11 更新：所有 action 已升到声明 node24 的版本，消除
+# "Node.js 20 is deprecated" 警告。
+#   actions/checkout          v4(node20) -> v5(node24)
+#   actions/setup-dotnet      v4(node20) -> v5(node24)
+#   actions/upload-artifact   v4(node20) -> v6(node24)   ← 注意不是 v5，v5 仍声明 node20
+#   actions/download-artifact v4(node20) -> v7(node24)   ← v5/v6 仍声明 node20
+#   softprops/action-gh-release v2(node20) -> v3(node24)
 
 name: .NET Core Desktop
 
@@ -34,14 +42,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       # 关键改动：csproj 的 TargetFramework 是 net10.0-windows10.0.22621.0，
       # 模板原来的 8.0.x 会直接报 SDK 版本不匹配。
       - name: Install .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
 
@@ -72,7 +80,7 @@ jobs:
 
       # 模板里的 MSIX 上传已替换为单文件 exe + zip
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Dockable-win-x64
           path: |
@@ -88,12 +96,12 @@ jobs:
 
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: Dockable-win-x64
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: Dockable-win-x64.zip
           generate_release_notes: true
