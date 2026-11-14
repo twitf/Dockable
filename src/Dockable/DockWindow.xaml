@@ -115,9 +115,9 @@
                     </Grid.RenderTransform>
                     <Image Source="{Binding Icon}"
                            Stretch="Uniform"
-                           RenderOptions.BitmapScalingMode="HighQuality">
+                           RenderOptions.BitmapScalingMode="Linear">
                         <Image.Effect>
-                            <DropShadowEffect BlurRadius="8" ShadowDepth="4" Direction="270" Opacity="{DynamicResource IconShadowInnerOpacity}" Color="#000000" />
+                            <DropShadowEffect BlurRadius="8" ShadowDepth="4" Direction="270" Opacity="{DynamicResource IconShadowInnerOpacity}" Color="#000000" RenderingBias="Performance" />
                         </Image.Effect>
                     </Image>
                 </Grid>

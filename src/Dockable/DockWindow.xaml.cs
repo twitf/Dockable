@@ -447,6 +447,10 @@ public partial class DockWindow : Window
             Direction = 270,
             Opacity = opacity,
             Color = Colors.Black,
+            // Software-blurred on a layered window, and the container's size changes every frame while
+            // the bar magnifies — this is re-blurred ~8 times per frame. The performance bias picks the
+            // cheaper sampling; on a 4K surface the visual difference is below noticeability.
+            RenderingBias = RenderingBias.Performance,
         };
         effect.Freeze();
         return effect;
