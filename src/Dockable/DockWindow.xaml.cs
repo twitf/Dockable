@@ -53,13 +53,6 @@ public partial class DockWindow : Window
     private DropShadowEffect? _restingOuterIconShadow;
     private DropShadowEffect? _restingInnerIconShadow;
     private DropShadowEffect? _restingOverlayIconShadow;
-    private DropShadowEffect? _restingBarShadow;
-    /// <summary>Bar shadow kernel while the render loop runs (the resting values are read back from XAML).
-    /// A 12px kernel is roughly 2.4x cheaper than the 30px one and the shadow stays visible.</summary>
-    private const double BarShadowAnimBlur = 12;
-    private const double BarShadowAnimDepth = 6;
-    private double _barShadowRestBlur = 30;
-    private double _barShadowRestDepth = 10;
     private TimeSpan _lastRenderTime; // last processed OnRendering frame, for the frame-rate cap
     // Last acrylic/capture rect pushed to native (device px + corner), to skip no-op SetWindowPos/SetRect
     // on the many render frames where the bar geometry hasn't actually changed.
@@ -423,9 +416,6 @@ public partial class DockWindow : Window
         _restingOuterIconShadow = PerformanceProfile.ReduceIconShadows ? null : FrozenOuterIconShadow(dark ? 0.12 : 0.10);
         _restingInnerIconShadow = PerformanceProfile.ReduceIconShadows ? null : FrozenInnerIconShadow(dark ? 0.18 : 0.14);
         _restingOverlayIconShadow = PerformanceProfile.ReduceIconShadows ? null : FrozenOverlayIconShadow();
-        _restingBarShadow = BarShadow;      // keep the instance: AnimationQuality re-tunes it per frame
-        _barShadowRestBlur = BarShadow.BlurRadius;
-        _barShadowRestDepth = BarShadow.ShadowDepth;
         ApplyAnimationQuality(_renderingHooked);
 
         // Windows 11-style context menus (Themes/ModernMenu.xaml) live at APPLICATION scope so
@@ -465,18 +455,9 @@ public partial class DockWindow : Window
         Resources["IconOuterShadowEffect"] = animating ? null : _restingOuterIconShadow;
         Resources["IconInnerShadowEffect"] = animating ? null : _restingInnerIconShadow;
         Resources["IconOverlayShadowEffect"] = animating ? null : _restingOverlayIconShadow;
-        // The bar's box-shadow is a 30px software blur sitting on an element whose WIDTH changes every
-        // magnify frame, so WPF re-blurs the whole bar per frame — the same trap as the icon shadows,
-        // on a far bigger surface. It stays attached instead of being dropped (losing it mid-hover
-        // reads as the bar flattening); while the loop runs it only tightens to a smaller kernel, then
-        // snaps back to the exact resting shape once the dock settles.
-        _restingBarShadow ??= BarShadow;   // ApplyAnimationQuality can run before ApplyTheme has run
-        if (_restingBarShadow is not null)
-        {
-            _restingBarShadow.BlurRadius = animating ? BarShadowAnimBlur : _barShadowRestBlur;
-            _restingBarShadow.ShadowDepth = animating ? BarShadowAnimDepth : _barShadowRestDepth;
-            DockBackground.Effect = _restingBarShadow;
-        }
+        // The bar's box-shadow is a 30px software blur on an element whose WIDTH changes every magnify
+        // frame, so WPF re-blurs the bar per frame. The previous build tightened it to 12px and measured
+        // 11-12ms per frame; this build leaves the original XAML kernel untouched so both are comparable.
         RenderOptions.SetBitmapScalingMode(this, animating
             ? BitmapScalingMode.Linear
             : BitmapScalingMode.HighQuality);
@@ -2363,11 +2344,16 @@ public partial class DockWindow : Window
             // too) or have already represented.
             if (App.Current.AnyDockHandles(hwnd))
                 continue;
-            // Use the capture taken while the window was still visible — capturing now (it's already
-            // minimized) would grab a black sliver.
-            var capture = Thumbnails.TryGet(hwnd) ?? WindowCapture.Capture(hwnd);
+            // Use the capture taken while the window was still visible. Never capture here: the window
+            // is already minimized, and an iconic window answers with an off-screen ~5:1 placeholder
+            // rect whose blit is pure black — which is exactly the "black bar" tile this used to
+            // produce. With no such capture, the window is still taken in, just without a preview.
+            var capture = Thumbnails.TryGet(hwnd);
             if (capture is null)
-                continue; // nothing to warp
+            {
+                App.Current.DockFor(hwnd).AdoptMinimizedWithoutCapture(hwnd);
+                continue; // nothing to animate; keep draining
+            }
             _minimizeDraining = true;
             // Into the dock on the window's OWN display; the queue (and its chaining) stays here.
             App.Current.DockFor(hwnd).MinimizeToDock(hwnd, capture, onDone: DrainMinimizeQueue);
@@ -2762,6 +2748,28 @@ public partial class DockWindow : Window
                     LoadTileIconFromApp(tile, hwnd);
             }
         }
+    }
+
+    /// <summary>Takes a window into the dock when there is no capture of it from while it was visible
+    /// (it was minimized from outside the dock, e.g. Win+D or the title bar, and the thumbnail cache
+    /// never saw it). The window still gets a dock entry so it can be restored from here — it is just
+    /// shown with its app icon instead of a preview, the same way windows that were already minimized
+    /// before the dock launched are represented. Restoring without a bitmap falls back to a plain restore.</summary>
+    internal void AdoptMinimizedWithoutCapture(IntPtr hwnd)
+    {
+        if (ViewModel is null || App.Current.AnyDockHandles(hwnd) || IsWindowRepresented(hwnd))
+            return;
+
+        var appVm = ViewModel.FindAppForWindow(hwnd);
+        if (ViewModel.Settings.MinimizeIntoIcon && appVm is not null)
+        {
+            AdoptIntoIcon(hwnd, appVm);
+            return;
+        }
+
+        var tile = ViewModel.AddMinimizedWindow(hwnd, appVm?.Icon, TaskbarApps.GetWindowTitle(hwnd), animate: false);
+        LoadTileIconFromApp(tile, hwnd);
+        LoadOverlayIcon(tile, hwnd);
     }
 
     /// <summary>Records an already-minimized window as stashed into its app icon, using the app's icon as

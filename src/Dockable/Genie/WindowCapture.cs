@@ -40,7 +40,7 @@ public static class WindowCapture
     /// DIB is still selected/alive (it may mutate them in place). All GDI objects are released in
     /// the same finally order as before the extraction. Null when any GDI step or the blit fails.</summary>
     private static unsafe BitmapSource? BlitScreenRect(int x, int y, int w, int h,
-        Func<IntPtr, int, int, BitmapSource> build)
+        Func<IntPtr, int, int, BitmapSource?> build)
     {
         HDC screenDc = PInvoke.GetDC((HWND)IntPtr.Zero);
         HDC memDc = PInvoke.CreateCompatibleDC(screenDc);
@@ -94,6 +94,14 @@ public static class WindowCapture
         long startTs = MinimizeProfiler.Enabled ? Stopwatch.GetTimestamp() : 0;
         var window = (HWND)hwnd;
 
+        // An iconic window keeps no composited surface: DWM answers with its icon-state placeholder
+        // rect (off-screen, a ~5:1 sliver) and the BitBlt of that area is all zeros. That black frame
+        // used to become a minimised tile's preview, which is the "black bar" that shows up in the
+        // dock. Callers must already hold a capture taken while the window was visible — refuse
+        // here, so no current OR future caller can reintroduce it.
+        if (PInvoke.IsIconic(window))
+            return null;
+
         // The DWM "extended frame bounds" exclude the drop shadow and the invisible resize border, so
         // we capture the window the user actually sees — not a margin of backdrop/shadow around it.
         // Fall back to GetWindowRect on older OSes / failure.
@@ -111,17 +119,46 @@ public static class WindowCapture
         if (w <= 0 || h <= 0 || w > 20000 || h > 20000)
             return null;
 
+        // A rect that cannot be a real window: too small to hold one, or a ratio no window has. This
+        // catches the other placeholder shapes (hidden/destroying windows) before they cost a blit.
+        if (w < 64 || h < 64 || w > 8 * h || h > 8 * w)
+            return null;
+
         int radiusPx = CornerRadiusPx(window, w, h);
 
         // Copy the composited screen pixels at the window's location, then carve the corners in place.
         var bitmap = BlitScreenRect(rect.left, rect.top, w, h, (bits, bw, bh) =>
         {
+            // A frame that is blank everywhere means the blit landed on empty DWM surface (mid-
+            // transition, hidden, or the placeholder shapes above). Storing it would overwrite a good
+            // preview with a black one, so it is refused here instead.
+            if (IsBlankFrame(bits, bw, bh))
+                return null;
             var built = BuildWindowBitmap(bits, bw, bh, radiusPx);
             if (MinimizeProfiler.Enabled)
                 MinimizeProfiler.Mark("capture", Stopwatch.GetElapsedTime(startTs).TotalMilliseconds, bw, bh);
             return built;
         });
         return bitmap is null ? null : new Result(bitmap, new Int32Rect(rect.left, rect.top, w, h));
+    }
+
+    /// <summary>Reports the captured frame as blank when every pixel of a 12×12 sample grid is pure
+    /// black. A real window always has some non-black pixel (its chrome at the very least), so a fully
+    /// black grid means the blit landed on empty surface. 144 reads, negligible next to the blit itself.</summary>
+    private static unsafe bool IsBlankFrame(IntPtr bits, int w, int h)
+    {
+        const int Samples = 12;
+        var pixels = new Span<uint>((void*)bits, w * h);
+        for (int sy = 0; sy < Samples; sy++)
+        {
+            int row = ((h - 1) * sy / (Samples - 1)) * w;
+            for (int sx = 0; sx < Samples; sx++)
+            {
+                if ((pixels[row + (w - 1) * sx / (Samples - 1)] & 0x00FF_FFFFu) != 0)
+                    return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>The window's rounded-corner radius in physical pixels (Win11 default ≈ 8 DIP, scaled
