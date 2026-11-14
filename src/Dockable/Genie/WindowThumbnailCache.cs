@@ -136,8 +136,8 @@ public sealed class WindowThumbnailCache : IDisposable
                         _capturing = false;
                         if (_disposed)
                             return;
-                        if (result is not null)
-                            Store((IntPtr)hwnd, result);
+                        if (result.HasValue)
+                            Store((IntPtr)hwnd, result.Value);
                     }
                 });
             }
