@@ -88,87 +88,69 @@
                     </Style>
                 </a11y:DockItemElement.Style>
 
-                <!-- Scaled icon layer. The container is sized to the RESTING box and never resizes,
-                     so magnification only updates this scale matrix — no per-frame measure/arrange and
-                     no per-frame re-rasterization of the icon at a new size (see
-                     DockItemViewModel.VisualScale). Everything icon-like lives inside; the running dot
-                     and the hover label stay outside so text and the 4px dot never get stretched. -->
-                <Grid>
+                <!-- Start tile: the app's original launcher glyph (StartGlyphGeometry in App.xaml —
+                     not the trademarked Windows flag), with a more pronounced drop shadow than the
+                     icons. Hidden while the user has a custom Start icon loaded (icon area instead). -->
+                <Viewbox Visibility="{Binding ShowStartGlyph, Converter={StaticResource BoolToVis}}">
+                    <Viewbox.Effect>
+                        <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270" Opacity="0.3" Color="#000000" />
+                    </Viewbox.Effect>
+                    <Path Fill="#FF50B0F0"
+                          Data="{StaticResource StartGlyphGeometry}" />
+                </Viewbox>
+
+                <!-- Separator divider: a 2px line across the bar — vertical on a horizontal dock,
+                     horizontal on a left/right dock (orientation comes from the view-model). -->
+                <Rectangle Width="{Binding DataContext.SeparatorWidth, RelativeSource={RelativeSource AncestorType=Window}}"
+                           Height="{Binding DataContext.SeparatorHeight, RelativeSource={RelativeSource AncestorType=Window}}"
+                           HorizontalAlignment="{Binding DataContext.SeparatorHAlign, RelativeSource={RelativeSource AncestorType=Window}}"
+                           VerticalAlignment="{Binding DataContext.SeparatorVAlign, RelativeSource={RelativeSource AncestorType=Window}}"
+                           RadiusX="1" RadiusY="1"
+                           Fill="{DynamicResource SeparatorBrush}"
+                           Visibility="{Binding IsSeparator, Converter={StaticResource BoolToVis}}" />
+
+                <!-- Extracted icon (shortcuts) or window thumbnail (minimized tiles).
+                     Two stacked drop-shadows (WPF allows one effect per element, so they're nested):
+                     outer = 0 10 20 / 0.12, inner = 0 4 8 / 0.18. -->
+                <Grid Visibility="{Binding ShowIconArea, Converter={StaticResource BoolToVis}}"
+                      Effect="{DynamicResource IconOuterShadowEffect}">
+                    <!-- Launch/attention bounce lifts only this icon (the running dot below stays put). -->
                     <Grid.RenderTransform>
-                        <ScaleTransform ScaleX="{Binding VisualScale}" ScaleY="{Binding VisualScale}" />
+                        <TranslateTransform X="{Binding BounceX}" Y="{Binding BounceY}" />
                     </Grid.RenderTransform>
-
-                    <!-- Separator divider: a 2px line across the bar — vertical on a horizontal dock,
-                         horizontal on a left/right dock (orientation comes from the view-model). It rides
-                         the same layer so its appear/disappear scale still animates with the slot. -->
-                    <Rectangle Width="{Binding DataContext.SeparatorWidth, RelativeSource={RelativeSource AncestorType=Window}}"
-                               Height="{Binding DataContext.SeparatorHeight, RelativeSource={RelativeSource AncestorType=Window}}"
-                               HorizontalAlignment="{Binding DataContext.SeparatorHAlign, RelativeSource={RelativeSource AncestorType=Window}}"
-                               VerticalAlignment="{Binding DataContext.SeparatorVAlign, RelativeSource={RelativeSource AncestorType=Window}}"
-                               RadiusX="1" RadiusY="1"
-                               Fill="{DynamicResource SeparatorBrush}"
-                               Visibility="{Binding IsSeparator, Converter={StaticResource BoolToVis}}" />
-
-                    <!-- Start tile: the app's original launcher glyph (StartGlyphGeometry in App.xaml —
-                         not the trademarked Windows flag), with a more pronounced drop shadow than the
-                         icons. Hidden while the user has a custom Start icon loaded (icon area instead). -->
-                    <Viewbox Visibility="{Binding ShowStartGlyph, Converter={StaticResource BoolToVis}}">
-                        <Viewbox.Effect>
-                            <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270" Opacity="0.3" Color="#000000" />
-                        </Viewbox.Effect>
-                        <Path Fill="#FF50B0F0"
-                              Data="{StaticResource StartGlyphGeometry}" />
-                    </Viewbox>
-
-                    <!-- Extracted icon (shortcuts) or window thumbnail (minimized tiles).
-                         Two stacked drop-shadows (WPF allows one effect per element, so they're nested):
-                         outer = 0 10 20 / 0.12, inner = 0 4 8 / 0.18. -->
-                    <Grid Visibility="{Binding ShowIconArea, Converter={StaticResource BoolToVis}}"
-                          Effect="{DynamicResource IconOuterShadowEffect}">
-                        <!-- Launch/attention bounce lifts only this icon (the running dot below stays put). -->
-                        <Grid.RenderTransform>
-                            <TranslateTransform X="{Binding BounceX}" Y="{Binding BounceY}" />
-                        </Grid.RenderTransform>
-                        <!-- Scaling quality is NOT set here: it inherits from the window, which switches to
-                             Linear only while the render loop runs (HighQuality is a software bicubic pass
-                             per frame, but its aliasing is visible on the resting icons). -->
-                        <Image Source="{Binding Icon}"
-                               Stretch="Uniform"
-                               Effect="{DynamicResource IconInnerShadowEffect}" />
-                    </Grid>
-
-                    <!-- Fallback while a shortcut icon is still loading -->
-                    <Border CornerRadius="10" Background="{DynamicResource FallbackBgBrush}">
-                        <Border.Visibility>
-                            <MultiBinding Converter="{StaticResource FallbackVis}">
-                                <Binding Path="ShowIconArea" />
-                                <Binding Path="Icon" />
-                            </MultiBinding>
-                        </Border.Visibility>
-                        <TextBlock Text="{Binding DisplayName}"
-                                   Foreground="{DynamicResource FallbackTextBrush}"
-                                   FontSize="11"
-                                   TextAlignment="Center"
-                                   TextTrimming="CharacterEllipsis"
-                                   VerticalAlignment="Center"
-                                   Margin="2" />
-                    </Border>
-
-                    <!-- App-icon badge on the bottom-right of a minimized-window thumbnail. It counter-
-                         scales about its own corner so it keeps its 20px size while the icon magnifies. -->
-                    <Image Source="{Binding OverlayIcon}"
-                           Width="20" Height="20"
-                           HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                           Margin="0,0,1,1"
+                    <!-- Scaling quality is NOT set here: it inherits from the window, which switches to
+                         Linear only while the render loop runs (HighQuality is a software bicubic pass
+                         per frame, but its aliasing is visible on the resting icons). -->
+                    <Image Source="{Binding Icon}"
                            Stretch="Uniform"
-                           RenderTransformOrigin="1,1"
-                           Effect="{DynamicResource IconOverlayShadowEffect}"
-                           Visibility="{Binding ShowOverlayIcon, Converter={StaticResource BoolToVis}}">
-                        <Image.RenderTransform>
-                            <ScaleTransform ScaleX="{Binding VisualInverseScale}" ScaleY="{Binding VisualInverseScale}" />
-                        </Image.RenderTransform>
-                    </Image>
+                           Effect="{DynamicResource IconInnerShadowEffect}" />
                 </Grid>
+
+                <!-- Fallback while a shortcut icon is still loading -->
+                <Border CornerRadius="10" Background="{DynamicResource FallbackBgBrush}">
+                    <Border.Visibility>
+                        <MultiBinding Converter="{StaticResource FallbackVis}">
+                            <Binding Path="ShowIconArea" />
+                            <Binding Path="Icon" />
+                        </MultiBinding>
+                    </Border.Visibility>
+                    <TextBlock Text="{Binding DisplayName}"
+                               Foreground="{DynamicResource FallbackTextBrush}"
+                               FontSize="11"
+                               TextAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"
+                               Margin="2" />
+                </Border>
+
+                <!-- App-icon badge on the bottom-right of a minimized-window thumbnail -->
+                <Image Source="{Binding OverlayIcon}"
+                       Width="20" Height="20"
+                       HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                       Margin="0,0,1,1"
+                       Stretch="Uniform"
+                       Effect="{DynamicResource IconOverlayShadowEffect}"
+                       Visibility="{Binding ShowOverlayIcon, Converter={StaticResource BoolToVis}}" />
 
                 <!-- Running indicator: a dot on the screen-edge side of the icon for open taskbar apps
                      (below for Bottom, above for Top, beside for Left/Right) — orientation from the VM. -->
@@ -177,11 +159,6 @@
                          HorizontalAlignment="{Binding DataContext.DotHAlign, RelativeSource={RelativeSource AncestorType=Window}}"
                          Margin="{Binding DataContext.DotMargin, RelativeSource={RelativeSource AncestorType=Window}}"
                          Fill="{DynamicResource RunningDotBrush}">
-                    <!-- Rides the icon's growth so it keeps sitting at the bar edge, not at the resting
-                         box's edge (the engine writes the nudge per edge). -->
-                    <Ellipse.RenderTransform>
-                        <TranslateTransform X="{Binding DotOffsetX}" Y="{Binding DotOffsetY}" />
-                    </Ellipse.RenderTransform>
                     <Ellipse.Visibility>
                         <MultiBinding Converter="{StaticResource AllTrueToVis}">
                             <Binding Path="IsRunning" />
@@ -201,15 +178,11 @@
                      placing it at half the icon width, then translated back by half its own width. -->
                 <Canvas IsHitTestVisible="False">
                     <StackPanel x:Name="HoverLabel"
-                                Canvas.Left="{Binding BoxWidth, Converter={StaticResource Multiply}, ConverterParameter=0.5}"
+                                Canvas.Left="{Binding RenderWidth, Converter={StaticResource Multiply}, ConverterParameter=0.5}"
                                 Canvas.Top="-39"
                                 Opacity="0">
                         <StackPanel.RenderTransform>
-                            <TransformGroup>
-                                <TranslateTransform X="{Binding ActualWidth, ElementName=HoverLabel, Converter={StaticResource Multiply}, ConverterParameter=-0.5}" />
-                                <!-- Keeps the gap above the icon constant while the icon magnifies. -->
-                                <TranslateTransform Y="{Binding LabelOffsetY}" />
-                            </TransformGroup>
+                            <TranslateTransform X="{Binding ActualWidth, ElementName=HoverLabel, Converter={StaticResource Multiply}, ConverterParameter=-0.5}" />
                         </StackPanel.RenderTransform>
                         <StackPanel.Visibility>
                             <MultiBinding Converter="{StaticResource AllTrueToVis}">
@@ -254,14 +227,12 @@
             </DataTemplate.Triggers>
         </DataTemplate>
 
-        <!-- Each item container is absolutely positioned at its RESTING box and sized to the resting
-             extent; the magnification rides a scale transform inside the template, so resizing is
-             never part of the per-frame path. -->
+        <!-- Each item container is absolutely positioned and sized by the layout engine. -->
         <Style x:Key="DockItemContainerStyle" TargetType="ContentPresenter">
-            <Setter Property="Canvas.Left" Value="{Binding BoxLeft}" />
-            <Setter Property="Canvas.Top" Value="{Binding BoxTop}" />
-            <Setter Property="Width" Value="{Binding BoxWidth}" />
-            <Setter Property="Height" Value="{Binding BoxHeight}" />
+            <Setter Property="Canvas.Left" Value="{Binding X}" />
+            <Setter Property="Canvas.Top" Value="{Binding Y}" />
+            <Setter Property="Width" Value="{Binding RenderWidth}" />
+            <Setter Property="Height" Value="{Binding RenderSize}" />
             <Style.Triggers>
                 <!-- The hovered icon (and its label) render above neighbours so a long label isn't
                      covered by the next icon. -->

@@ -134,43 +134,6 @@ public sealed partial class DockItemViewModel : ObservableObject
     [ObservableProperty]
     private double _y;
 
-    // --- Resting box + per-frame transform ---
-    // The ContentPresenter is sized/positioned from the box* values, which stay put while the icon
-    // magnifies: the growth rides VisualScale instead. That keeps a magnify frame off the measure/
-    // arrange path entirely — re-measuring every icon every frame (and re-rasterizing its image at a
-    // new size) is what capped the magnification at 15–33 fps on a 4K @150% layered window.
-
-    /// <summary>Resting (unscaled) left of the item's container in window coordinates.</summary>
-    [ObservableProperty] private double _boxLeft;
-
-    /// <summary>Resting (unscaled) top of the item's container in window coordinates.</summary>
-    [ObservableProperty] private double _boxTop;
-
-    /// <summary>Resting (unscaled) width of the item's container.</summary>
-    [ObservableProperty] private double _boxWidth;
-
-    /// <summary>Resting (unscaled) height of the item's container.</summary>
-    [ObservableProperty] private double _boxHeight;
-
-    /// <summary>Scale applied to the icon layer (magnification × appearance; 1 = resting). Bound to a
-    /// ScaleTransform, written by the layout engine every animation frame.</summary>
-    [ObservableProperty] private double _visualScale = 1.0;
-
-    /// <summary>1 / <see cref="VisualScale"/>: the minimized-window badge counter-scales with it so it
-    /// keeps its pixel size instead of growing with the icon.</summary>
-    [ObservableProperty] private double _visualInverseScale = 1.0;
-
-    /// <summary>How far the scaled icon grows past the resting box top (negative = up): the hover label
-    /// rides it so the gap above the icon stays constant instead of shrinking by the icon's growth.</summary>
-    [ObservableProperty] private double _labelOffsetY;
-
-    /// <summary>Screen-space nudge that keeps the running dot at the bar edge while the icon magnifies
-    /// past the resting box (per-edge, written by the layout engine).</summary>
-    [ObservableProperty] private double _dotOffsetX;
-
-    /// <summary>Vertical half of <see cref="DotOffsetX"/>'s job (see it).</summary>
-    [ObservableProperty] private double _dotOffsetY;
-
     /// <summary>Smoothed magnification scale (1 = resting). Plain field; not bound.</summary>
     public double CurrentScale { get; set; } = 1.0;
 
