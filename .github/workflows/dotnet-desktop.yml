@@ -1,0 +1,99 @@
+# 基于 GitHub 官方 ".NET Core Desktop" 模板改造，已适配 Dockable 仓库真实结构：
+#   - 单一项目 src/Dockable/Dockable.csproj（C# 12 + WPF，net10.0-windows10.0.22621.0，x64，unpackaged）
+#   - 无测试项目、无 .wapproj / MSIX 打包、无代码签名证书
+#   - 产物是仓库自带的 Portable 发布配置生成的单文件 Dockable.exe
+
+name: .NET Core Desktop
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  build:
+    # 模板里的 matrix: [Debug, Release] 已去掉：Debug 产物没有分发价值，
+    # 且会让耗时翻倍。Portable 发布配置内部已固定 Configuration=Release。
+    runs-on: windows-latest
+
+    env:
+      Project_Path: src/Dockable/Dockable.csproj
+      Publish_Profile: Portable
+      Publish_Dir: src/Dockable/bin/Publish/Portable/win-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 关键改动：csproj 的 TargetFramework 是 net10.0-windows10.0.22621.0，
+      # 模板原来的 8.0.x 会直接报 SDK 版本不匹配。
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Show SDK info
+        run: dotnet --info
+
+      # 模板里的 "Setup MSBuild.exe"、"dotnet test" 已删：
+      #   - dotnet CLI 足够还原/发布（CsWin32 源生成器走 NuGet，不需要 MSBuild 在 PATH）
+      #   - 本仓库没有任何测试项目，dotnet test 会失败
+      - name: Restore
+        run: dotnet restore $env:Project_Path
+
+      - name: Publish (Portable profile)
+        run: dotnet publish $env:Project_Path -p:PublishProfile=$env:Publish_Profile
+
+      - name: Verify output exe
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:Publish_Dir 'Dockable.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "Expected output was not produced: $exe" }
+          Write-Host ("Built {0} ({1} MB)" -f $exe, [math]::Round((Get-Item -LiteralPath $exe).Length / 1MB, 1))
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "$env:Publish_Dir/*" -DestinationPath "Dockable-win-x64.zip" -Force
+          Write-Host ("Dockable-win-x64.zip ({0} MB)" -f [math]::Round((Get-Item 'Dockable-win-x64.zip').Length / 1MB, 1))
+
+      # 模板里的 MSIX 上传已替换为单文件 exe + zip
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dockable-win-x64
+          path: |
+            Dockable-win-x64.zip
+            src/Dockable/bin/Publish/Portable/win-x64/Dockable.exe
+          if-no-files-found: error
+
+  # 模板没有这一段：打 v* 标签时自动建 Release，附上 zip
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Dockable-win-x64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Dockable-win-x64.zip
+          generate_release_notes: true
