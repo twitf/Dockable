@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -21,6 +22,18 @@ public static class WindowCapture
     // CAPTUREBLT makes the blit include layered / composited windows.
     private const ROP_CODE CaptureRop = ROP_CODE.SRCCOPY | ROP_CODE.CAPTUREBLT;
 
+    /// <summary>Longest edge, in physical pixels, a window capture is kept at. Nothing reads it at
+    /// native resolution: a tile is ~80 DIP (120 px at 150%), a preview popup a few hundred, and the
+    /// genie warp only stretches it while it shrinks into the tile. Capturing a maximised 4K window at
+    /// full resolution wrote 33 MB three times over (the DIB, the alpha pass, then WritePixels) and
+    /// measured 40-112 ms on this machine - the dock's single biggest recurring cost, once every
+    /// 2.5 s. The down-scale happens inside the blit, so no extra pass is paid for it.</summary>
+    private const int MaxCaptureDim = 768;
+
+    /// <summary>HALFTONE: average the source pixels instead of dropping them. At a 5x down-scale
+    /// (4K to 768) point sampling would leave visible noise that every later stage inherits.</summary>
+    private const int HalftoneStretchMode = 4;
+
     public readonly record struct Result(BitmapSource Bitmap, Int32Rect ScreenRectPx);
 
     /// <summary>
@@ -41,6 +54,12 @@ public static class WindowCapture
     /// the same finally order as before the extraction. Null when any GDI step or the blit fails.</summary>
     private static unsafe BitmapSource? BlitScreenRect(int x, int y, int w, int h,
         Func<IntPtr, int, int, BitmapSource?> build)
+        => BlitScreenRect(x, y, w, h, w, h, build);
+
+    /// <summary>As above, but into a <paramref name="dw"/>×<paramref name="dh"/> bitmap, letting GDI
+    /// do the down-scale during the blit (StretchBlt) instead of copying the full-size pixels first.</summary>
+    private static unsafe BitmapSource? BlitScreenRect(int x, int y, int w, int h, int dw, int dh,
+        Func<IntPtr, int, int, BitmapSource?> build)
     {
         HDC screenDc = PInvoke.GetDC((HWND)IntPtr.Zero);
         HDC memDc = PInvoke.CreateCompatibleDC(screenDc);
@@ -48,8 +67,8 @@ public static class WindowCapture
         {
             var bmi = new BITMAPINFO();
             bmi.bmiHeader.biSize = (uint)sizeof(BITMAPINFOHEADER);
-            bmi.bmiHeader.biWidth = w;
-            bmi.bmiHeader.biHeight = -h; // negative => top-down rows
+            bmi.bmiHeader.biWidth = dw;
+            bmi.bmiHeader.biHeight = -dh; // negative => top-down rows
             bmi.bmiHeader.biPlanes = 1;
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = 0; // BI_RGB
@@ -62,9 +81,23 @@ public static class WindowCapture
             HGDIOBJ previous = PInvoke.SelectObject(memDc, (HGDIOBJ)(void*)dib);
             try
             {
-                if (!PInvoke.BitBlt(memDc, 0, 0, w, h, screenDc, x, y, CaptureRop))
+                bool blitted;
+                if (dw == w && dh == h)
+                {
+                    blitted = PInvoke.BitBlt(memDc, 0, 0, w, h, screenDc, x, y, CaptureRop);
+                }
+                else
+                {
+                    // Mode applies to the next StretchBlt; the brush origin is reset because HALFTONE
+                    // otherwise aligns its dither pattern to whatever was set last, leaving streaks.
+                    SetStretchBltMode(memDc, HalftoneStretchMode);
+                    SetBrushOrgEx(memDc, 0, 0, IntPtr.Zero);
+                    blitted = StretchBlt(memDc, 0, 0, dw, dh, screenDc, x, y, w, h, (uint)CaptureRop);
+                }
+
+                if (!blitted)
                     return null;
-                return build((IntPtr)bits, w, h);
+                return build((IntPtr)bits, dw, dh);
             }
             finally
             {
@@ -78,6 +111,18 @@ public static class WindowCapture
             PInvoke.ReleaseDC((HWND)IntPtr.Zero, screenDc);
         }
     }
+
+    // Hand-declared rather than added to the CsWin32 allow-list (NativeMethods.txt): two GDI entry
+    // points, everything else in this file already goes through PInvoke.
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool StretchBlt(HDC hdcDest, int xDest, int yDest, int wDest, int hDest,
+        HDC hdcSrc, int xSrc, int ySrc, int wSrc, int hSrc, uint rop);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern int SetStretchBltMode(HDC hdc, int mode);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool SetBrushOrgEx(HDC hdc, int x, int y, IntPtr point);
 
     /// <summary>The Liquid Glass backdrop bitmap: the raw BGRX bits as an opaque Bgr32 image.</summary>
     private static BitmapSource BuildBackdropBitmap(IntPtr bits, int w, int h)
@@ -126,15 +171,22 @@ public static class WindowCapture
 
         int radiusPx = CornerRadiusPx(window, w, h);
 
+        // Blit at (at most) MaxCaptureDim on the long edge. The pixels are only ever shown inside a
+        // tile or a popup, so full resolution bought nothing but a 33 MB round trip per capture.
+        double shrink = Math.Min(1.0, MaxCaptureDim / (double)Math.Max(w, h));
+        int cw = Math.Max(1, (int)Math.Round(w * shrink));
+        int ch = Math.Max(1, (int)Math.Round(h * shrink));
+        int carvePx = shrink < 1.0 ? Math.Max(1, (int)Math.Round(radiusPx * shrink)) : radiusPx;
+
         // Copy the composited screen pixels at the window's location, then carve the corners in place.
-        var bitmap = BlitScreenRect(rect.left, rect.top, w, h, (bits, bw, bh) =>
+        var bitmap = BlitScreenRect(rect.left, rect.top, w, h, cw, ch, (bits, bw, bh) =>
         {
             // A frame that is blank everywhere means the blit landed on empty DWM surface (mid-
             // transition, hidden, or the placeholder shapes above). Storing it would overwrite a good
             // preview with a black one, so it is refused here instead.
             if (IsBlankFrame(bits, bw, bh))
                 return null;
-            var built = BuildWindowBitmap(bits, bw, bh, radiusPx);
+            var built = BuildWindowBitmap(bits, bw, bh, carvePx);
             if (MinimizeProfiler.Enabled)
                 MinimizeProfiler.Mark("capture", Stopwatch.GetElapsedTime(startTs).TotalMilliseconds, bw, bh);
             return built;

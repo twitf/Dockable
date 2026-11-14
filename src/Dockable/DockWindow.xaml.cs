@@ -332,9 +332,13 @@ public partial class DockWindow : Window
                 long now = Stopwatch.GetTimestamp();
                 if (_lastWatchTs != 0)
                 {
-                    double ms = Us(_lastWatchTs, now) / 1000.0;
-                    if (ms > 120)
-                        FrameProbe.Note($"stall {ms:F0}ms");
+                    // Us() measures the gap between two 100 ms heartbeats, so the late part - what the
+                    // dock actually froze for - is (gap - 100). The raw gap is printed alongside it so a
+                    // value can be read straight off without remembering the baseline.
+                    double gapMs = Us(_lastWatchTs, now) / 1000.0;
+                    double lateMs = gapMs - 100.0;
+                    if (lateMs > 20)
+                        FrameProbe.Note($"stall {lateMs:F0}ms late (heartbeat gap {gapMs:F0}ms)");
                 }
                 _lastWatchTs = now;
             };

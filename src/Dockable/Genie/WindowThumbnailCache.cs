@@ -18,9 +18,12 @@ namespace Dockable.Genie;
 public sealed class WindowThumbnailCache : IDisposable
 {
     private const int MaxEntries = 12;
-    // 1200 -> 2500. Each refresh is a screen-DC BitBlt read-back of the whole foreground window
-    // (tens of ms for a maximised 4K window, on the UI thread), and the cache only feeds the
-    // minimize animation — which tolerates a 2.5 s stale image.
+    // 1200 -> 2500. Each refresh is a screen-DC read-back of the whole foreground window, and the
+    // cache only feeds the minimize warp / a minimized tile, both of which tolerate a 2.5 s stale
+    // image. Since 08673b6 the blit runs on its own below-normal thread and the pixels are scaled down
+    // inside the blit (WindowCapture.MaxCaptureDim), so one refresh costs a few ms rather than the
+    // 40-112 ms it used to - but the DWM composition it forces still lands on the dock's next present,
+    // which is why it stays this infrequent rather than going per-second.
     private const int RefreshMs = 2500;
     // Wait for a newly-focused window to actually be raised on top and repainted before
     // capturing it; capturing immediately on the focus event can grab the windows that
@@ -86,13 +89,21 @@ public sealed class WindowThumbnailCache : IDisposable
     private void CaptureForeground()
     {
         if (ShouldSuspend?.Invoke() == true)
-            return; // a warp is animating, or the dock is itself animating — don't read back now
+        {
+            // Not now: re-arm the settle timer so the capture lands just after the animation ends,
+            // instead of being dropped for a whole refresh interval (the tile would keep a missing or
+            // stale preview until the next tick). Re-arming is free when nothing is animating.
+            _settleTimer.Stop();
+            _settleTimer.Start();
+            return;
+        }
         BeginCapture(PInvoke.GetForegroundWindow());
     }
 
     /// <summary>
-    /// Runs the screen read-back on a worker thread. Measured on a 4K @150% desktop, one capture of a
-    /// maximised window costs <b>100-400 ms</b> — as a DispatcherTimer handler that was a dead freeze of
+    /// Runs the screen read-back on a worker thread. Measured on a 4K @150% desktop before the
+    /// down-scaled blit landed, one capture of a maximised window cost <b>40-112 ms</b> (the probe
+    /// still records it as an <c>R</c> line) — as a DispatcherTimer handler that was a dead freeze of
     /// the UI thread, which is exactly the stutter this cache injected into the dock's own animation.
     /// The result is built and frozen on the worker, then handed back to the dock's thread to store.
     /// </summary>
