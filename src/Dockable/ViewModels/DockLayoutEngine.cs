@@ -96,7 +96,8 @@ public sealed class DockLayoutEngine
     private double _restingBlockMain;  // main-axis start of the resting (un-magnified) row
     private double _alongWindow;       // window size along the main axis (eased toward the target)
     private double _alongWindowTarget; // recomputed main-axis size; _alongWindow glides to it per frame
-    private double _fixedMainExtent;   // full monitor edge (DIP); >0 pins the window's main-axis size
+    private double _fixedMainExtent;   // monitor edge (DIP): an UPPER BOUND — the window is sized to the
+                                       // magnified bar and never wider (see Recompute)
     private double _crossWindow;       // window size along the cross (depth) axis
     private double _gapExtent;         // eased width of the drag/drop placeholder gap (0 when closed)
 
@@ -200,16 +201,21 @@ public sealed class DockLayoutEngine
         // The extent any magnified bar (plus a drag gap) can cover — the window size when no fixed
         // extent is pinned, and always the cursor hover footprint (see HoverExtentMain).
         double contentExtent = ComputeMaxMagnifiedAlong() + _baseSize + Gap + 2 * HPad + 30;
-        // With a monitor edge pinned (the normal case), the window NEVER resizes along the main
-        // axis: tiles growing in/out animate purely in canvas coordinates, which render atomically —
-        // resizing + recentering the window instead desyncs the native rect from the layered bitmap
-        // for a frame each step (visible jitter, even eased). Unpinned (before the first
-        // PositionDock), the old glide-to-content-size behavior remains.
-        _alongWindowTarget = _fixedMainExtent > 0 ? _fixedMainExtent : contentExtent;
+        // With a monitor edge known (the normal case), the window NEVER resizes along the main axis
+        // while tiles grow in/out: resizing + recentering a layered window desyncs the native rect from
+        // the bitmap for a frame each step (visible jitter, even eased). Its size only changes when the
+        // items or the settings do.
+        //
+        // It is sized to that widest possible bar, NOT to the whole monitor edge: a monitor-wide strip
+        // is mostly transparent, yet WPF rasterizes and presents the WHOLE window surface every frame.
+        // Measured on a 4K @150% panel, hovering that strip cost ~45 ms of CPU per presented frame
+        // (≈10 fps) — and it stayed that expensive with the icon shadows forced off, so the cost scales
+        // with surface AREA, not with what is drawn on it. Sizing to the bar cuts the surface ~3x.
+        _alongWindowTarget = _fixedMainExtent > 0 ? Math.Min(_fixedMainExtent, contentExtent) : contentExtent;
         if (_alongWindow <= 0 || _fixedMainExtent > 0)
-            _alongWindow = _alongWindowTarget; // fixed strip (or first layout): snap, nothing glides
-        // The strip window is monitor-wide, so "cursor inside the window" is no longer a hover test;
-        // DockWindow tests this centered footprint instead.
+            _alongWindow = _alongWindowTarget; // fixed size (or first layout): snap, nothing glides
+        // The hover test is a centered footprint of this extent (see DockWindow's hover check), so it
+        // works whether the window is exactly the bar or a wider strip.
         _vm.HoverExtentMain = Math.Min(contentExtent, _alongWindowTarget);
 
         if (IsVertical)

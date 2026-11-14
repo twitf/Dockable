@@ -955,11 +955,14 @@ public partial class DockWindow : Window
     /// <summary>Anchors the dock flush to its monitor's docked edge, centered along the other axis.</summary>
     private void PositionDock()
     {
-        // Pin the window's main-axis size to the full monitor edge (a fixed strip): resizing the
-        // window as tiles grow in/out desynced the native resize+recenter from the layered bitmap
-        // for a frame each step — the whole dock jittered. With the strip pinned, only monitor/DPI/
-        // edge changes ever resize the window. (Re-entry note: a changed extent recomputes layout →
-        // ApplyWindowSize → PositionDock again; the second pass sees no change and falls through.)
+        // Hand the engine its monitor edge as an UPPER BOUND; it sizes the window to the widest bar the
+        // magnification can produce (never wider). Resizing as tiles grow in/out desynced the native
+        // resize+recenter from the layered bitmap for a frame each step — the whole dock jittered — so
+        // the size stays fixed while tiles animate; it only changes with the items/settings. A
+        // monitor-wide strip would be mostly transparent yet still cost a full surface raster per
+        // frame, which is what capped the animation at ~10 fps on a 4K panel. (Re-entry note: a changed
+        // extent recomputes layout → ApplyWindowSize → PositionDock again; the second pass sees no
+        // change and falls through.)
         if (_hwnd != IntPtr.Zero && ViewModel is not null)
         {
             var info = MonitorInfo();
