@@ -289,6 +289,15 @@ public partial class DockWindow : Window
         _appRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _appRefreshTimer.Tick += (_, _) =>
         {
+            // Hidden for a full-screen app: the dock is not on screen, so icon enumeration, the topmost
+            // nudge and pin polling are pure waste competing with the game for the UI thread. Keep only
+            // the fullscreen check itself — that is how the dock notices the game has gone away.
+            if (_fullscreenActive)
+            {
+                UpdateFullscreenState();
+                return;
+            }
+
             RefreshTaskbarApps();
             UpdateFullscreenState(); // backstop in case a fullscreen transition didn't raise an event
             CheckCaptureFriendlyExit(); // re-exclude the dock from capture once the Snipping Tool is gone
@@ -519,7 +528,16 @@ public partial class DockWindow : Window
         {
             // A warp on ANY display stutters if the shared capture thread keeps blitting (they all land
             // on the one UI thread), so the suspend test spans every dock.
-            _thumbnails.ShouldSuspend = () => App.Current.AnyDockWarping();
+            // Also suspend while the dock itself is magnifying (hovered or with the render loop hooked):
+            // the magnification animation and this read-back share one UI thread, so a full-screen BitBlt
+            // landing mid-hover shows up as a periodic stutter of the icon animation. A full-screen app in
+            // front is skipped too — nothing to gain from reading a game's pixels back every few seconds.
+            _thumbnails.ShouldSuspend = () =>
+                App.Current.AnyDockWarping()
+                || _renderingHooked
+                || _hovering
+                || _fullscreenActive
+                || (_hwnd != IntPtr.Zero && Fullscreen.IsForegroundFullscreenOnMonitorOf(_hwnd, _ownProcessId));
             _thumbnails.Start();
             _minimizeHook.WindowMinimizing += OnWindowMinimizing;
             _minimizeHook.WindowUnminimized += OnWindowUnminimized;
@@ -801,6 +819,9 @@ public partial class DockWindow : Window
     // sees every global mouse move — a bar-rect test there would raise on approach instead.
     internal void KeepOnTop()
     {
+        if (_fullscreenActive)
+            return; // hidden behind a full-screen app — there is nothing on screen to raise above
+
         if (_hwnd == IntPtr.Zero || _busy.Count > 0 /* a minimize warp lands ON the bar */)
             return;
         // Our own topmost children overlap the dock and are inserted above it: Preferences/dialogs and
@@ -895,6 +916,7 @@ public partial class DockWindow : Window
             _appBar?.Unregister();
             Hide();
             _acrylic.Hide();
+            UnhookRendering(); // hidden: nothing to animate, and a hooked loop would keep burning frames
         }
         else
         {
@@ -902,6 +924,7 @@ public partial class DockWindow : Window
             Show();
             PositionDock();
             ApplyGlassEffect();
+            RefreshTaskbarApps(); // the 1 s tick skipped this while the game ran — resync the icons now
         }
     }
 
@@ -2839,6 +2862,28 @@ public partial class DockWindow : Window
     }
 
     private void OnRendering(object? sender, EventArgs e)
+    {
+        if (!FrameProbe.Enabled)
+        {
+            OnRenderingCore(sender, e);
+            return;
+        }
+
+        // Opt-in profiler (see Interop/FrameProbe.cs): one timestamp pair per processed frame, no I/O in
+        // the frame itself. The body below is untouched, so a profiled run does the same work as a normal
+        // one — the numbers are only trustworthy if that stays true.
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            OnRenderingCore(sender, e);
+        }
+        finally
+        {
+            FrameProbe.RecordFrame(started);
+        }
+    }
+
+    private void OnRenderingCore(object? sender, EventArgs e)
     {
         // While a minimize/restore warp is animating, pause the dock's own per-frame work (magnification,
         // acrylic tracking, glass shader updates). It shares CompositionTarget.Rendering with the warp, and

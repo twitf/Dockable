@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows.Threading;
 using Dockable.Interop;
 using Windows.Win32;
@@ -17,7 +18,10 @@ namespace Dockable.Genie;
 public sealed class WindowThumbnailCache : IDisposable
 {
     private const int MaxEntries = 12;
-    private const int RefreshMs = 1200;
+    // 1200 -> 2500. Each refresh is a screen-DC BitBlt read-back of the whole foreground window
+    // (tens of ms for a maximised 4K window, on the UI thread), and the cache only feeds the
+    // minimize animation — which tolerates a 2.5 s stale image.
+    private const int RefreshMs = 2500;
     // Wait for a newly-focused window to actually be raised on top and repainted before
     // capturing it; capturing immediately on the focus event can grab the windows that
     // were still covering it.
@@ -86,7 +90,10 @@ public sealed class WindowThumbnailCache : IDisposable
         if (!WindowFilter.IsEligibleAppWindow(hwnd, _ownProcessId))
             return;
 
+        long started = FrameProbe.Enabled ? Stopwatch.GetTimestamp() : 0;
         var result = WindowCapture.Capture((IntPtr)hwnd);
+        if (FrameProbe.Enabled)
+            FrameProbe.RecordReadback(started);
         if (result is not null)
             Store((IntPtr)hwnd, result.Value);
     }
