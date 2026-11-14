@@ -108,8 +108,14 @@ public sealed class WindowThumbnailCache : IDisposable
             _capturing = true;
         }
 
-        System.Threading.Tasks.Task.Run(() =>
+        // Below normal priority, like BackdropCapturer's read-back thread: one capture of a maximised
+        // 4K window is 100-400 ms of CPU plus a forced DWM sync, and the moment it fires — a foreground
+        // change — is exactly when a just-launched game is saturating the machine. At the pool's default
+        // priority this capture competes with it for cores; below normal the scheduler defers it and the
+        // preview simply lands a beat later.
+        System.Threading.Tasks.Task.Factory.StartNew(() =>
         {
+            System.Threading.Thread.CurrentThread.Priority = System.Threading.ThreadPriority.BelowNormal;
             long started = FrameProbe.Enabled ? Stopwatch.GetTimestamp() : 0;
             WindowCapture.Result? captured = null;
             try
@@ -148,7 +154,7 @@ public sealed class WindowThumbnailCache : IDisposable
                 lock (_gate)
                     _capturing = false;
             }
-        });
+        }, System.Threading.Tasks.TaskCreationOptions.LongRunning);
     }
 
 

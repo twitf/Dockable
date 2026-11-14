@@ -76,11 +76,41 @@ public static class WindowControl
         return new Int32Rect(r.left, r.top, r.right - r.left, r.bottom - r.top);
     }
 
-    public static void Restore(IntPtr hwnd)
+    /// <summary>
+    /// Un-minimizes a window and (optionally) brings it to the foreground. <paramref name="hwnd"/> must
+    /// be a live top-level window.
+    /// </summary>
+    /// <remarks>
+    /// <c>ShowWindow(SW_RESTORE)</c> is a message-based call: when the target runs at a HIGHER integrity
+    /// level than the dock (Task Manager is elevated, and some game clients are launched elevated by
+    /// their anti-cheat service) UIPI refuses it with ERROR_ACCESS_DENIED. The window then stays
+    /// minimized — and, because SetForegroundWindow is kernel-side and does succeed, the click looks
+    /// like it did nothing at all. <c>SwitchToThisWindow</c> is user32's own Alt+Tab switch and is not
+    /// message-based, so it restores the window across that boundary. Measure, don't assume: on this
+    /// machine ShowWindow failed on both a Task Manager window and a running client while
+    /// SwitchToThisWindow restored and raised both.
+    /// </remarks>
+    private static void RestoreWindow(IntPtr hwnd, bool foreground = true)
     {
-        PInvoke.ShowWindow((HWND)hwnd, SHOW_WINDOW_CMD.SW_RESTORE);
-        PInvoke.SetForegroundWindow((HWND)hwnd);
+        var window = (HWND)hwnd;
+        if (PInvoke.IsIconic(window))
+        {
+            PInvoke.ShowWindow(window, SHOW_WINDOW_CMD.SW_RESTORE);
+            if (PInvoke.IsIconic(window))
+                SwitchToThisWindow(hwnd, true); // refused across the integrity boundary — take the other path
+        }
+
+        if (foreground)
+            PInvoke.SetForegroundWindow(window);
     }
+
+    // Not exposed by the CsWin32 allow-list (NativeMethods.txt) and documented only as "reserved" in
+    // the SDK headers, but it is the same entry point Alt+Tab uses and is stable on every Windows since
+    // 2000. Declared here so the restore path doesn't depend on a generated binding.
+    [DllImport("user32.dll")]
+    private static extern void SwitchToThisWindow(IntPtr hwnd, bool altTab);
+
+    public static void Restore(IntPtr hwnd) => RestoreWindow(hwnd);
 
     /// <summary>Un-minimizes a window without forcing it to the foreground — used to restore every
     /// dock-minimized window on exit without thrashing focus across all of them.</summary>
@@ -88,12 +118,7 @@ public static class WindowControl
         PInvoke.ShowWindow((HWND)hwnd, SHOW_WINDOW_CMD.SW_RESTORE);
 
     /// <summary>Brings a window forward (restoring it first if minimized).</summary>
-    public static void Activate(IntPtr hwnd)
-    {
-        if (PInvoke.IsIconic((HWND)hwnd))
-            PInvoke.ShowWindow((HWND)hwnd, SHOW_WINDOW_CMD.SW_RESTORE);
-        PInvoke.SetForegroundWindow((HWND)hwnd);
-    }
+    public static void Activate(IntPtr hwnd) => RestoreWindow(hwnd);
 
     /// <summary>
     /// Brings every window in a group to the top of the z-order (restoring any minimized ones),
@@ -117,9 +142,9 @@ public static class WindowControl
         {
             var h = (HWND)hwnds[i];
             if (PInvoke.IsIconic(h))
-                PInvoke.ShowWindow(h, SHOW_WINDOW_CMD.SW_RESTORE);
+                RestoreWindow(hwnds[i], foreground: false); // UIPI-tolerant, see RestoreWindow
             PInvoke.SetWindowPos(h, hwndTop, 0, 0, 0, 0, flags);
         }
-        PInvoke.SetForegroundWindow((HWND)hwnds[0]);
+        RestoreWindow(hwnds[0]); // focus the first window, with the same refusal fallback
     }
 }

@@ -35,6 +35,13 @@
         <SolidColorBrush x:Key="FallbackBgBrush" Color="#1F000000" />
         <SolidColorBrush x:Key="FallbackTextBrush" Color="#CC000000" />
 
+        <!-- Preview-less minimized-window card (light defaults; ApplyTheme() swaps per theme). A tile
+             with no window image is drawn as a small window with the app icon inside, so it reads as
+             "a window lives here" instead of as a second, bigger copy of the app icon. -->
+        <SolidColorBrush x:Key="WindowCardBgBrush" Color="#F2FBFDFF" />
+        <SolidColorBrush x:Key="WindowCardBorderBrush" Color="#33000000" />
+        <SolidColorBrush x:Key="WindowCardBandBrush" Color="#FFE4EAF2" />
+
         <!-- Hover label + Remove tag (themed in ApplyTheme; light defaults here). -->
         <SolidColorBrush x:Key="LabelBgBrush" Color="#F2F7F7FA" />
         <SolidColorBrush x:Key="LabelBorderBrush" Color="#22000000" />
@@ -140,6 +147,25 @@
                         <Image Source="{Binding Icon}"
                                Stretch="Uniform"
                                Effect="{DynamicResource IconInnerShadowEffect}" />
+                    </Grid>
+
+                    <!-- Preview-less minimized window: no capture existed when it minimized (Win+D and
+                         other batch minimizes take background windows the thumbnail cache never saw).
+                         Drawn as a window card — outline, title band, app icon inside — instead of the
+                         bare app icon, which rendered as an enlarged duplicate of a neighbouring tile.
+                         Rides the same scaled layer, so it magnifies like every other entry. -->
+                    <Grid Width="{Binding BoxWidth}"
+                          Height="{Binding BoxWidth, Converter={StaticResource Multiply}, ConverterParameter=0.78}"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                          Effect="{DynamicResource IconOuterShadowEffect}"
+                          Visibility="{Binding ShowWindowCard, Converter={StaticResource BoolToVis}}">
+                        <Border CornerRadius="4"
+                                Background="{DynamicResource WindowCardBgBrush}"
+                                BorderBrush="{DynamicResource WindowCardBorderBrush}"
+                                BorderThickness="1" />
+                        <Border Height="6" VerticalAlignment="Top" CornerRadius="4,4,0,0"
+                                Background="{DynamicResource WindowCardBandBrush}" />
+                        <Image Source="{Binding Icon}" Margin="4,8,4,4" Stretch="Uniform" />
                     </Grid>
 
                     <!-- Fallback while a shortcut icon is still loading -->

@@ -54,6 +54,8 @@ public partial class DockWindow : Window
     private DropShadowEffect? _restingInnerIconShadow;
     private DropShadowEffect? _restingOverlayIconShadow;
     private TimeSpan _lastRenderTime; // last processed OnRendering frame, for the frame-rate cap
+    private DispatcherTimer? _stallWatch;   // probe-only UI-stall detector (null unless profiling)
+    private long _lastWatchTs;              // last watchdog timestamp (0 until its first tick)
     // Last acrylic/capture rect pushed to native (device px + corner), to skip no-op SetWindowPos/SetRect
     // on the many render frames where the bar geometry hasn't actually changed.
     private int _lastSyncX, _lastSyncY, _lastSyncW, _lastSyncH;
@@ -301,14 +303,42 @@ public partial class DockWindow : Window
                 return;
             }
 
+            // Splits this tick into its steps when the probe is on: a foreground switch to a window the
+            // dock has never seen (a game launching) makes this the one place the UI thread can stall.
+            long t0 = FrameProbe.Enabled ? Stopwatch.GetTimestamp() : 0;
             RefreshTaskbarApps();
+            long t1 = FrameProbe.Enabled ? Stopwatch.GetTimestamp() : 0;
             UpdateFullscreenState(); // backstop in case a fullscreen transition didn't raise an event
             CheckCaptureFriendlyExit(); // re-exclude the dock from capture once the Snipping Tool is gone
+            long t2 = FrameProbe.Enabled ? Stopwatch.GetTimestamp() : 0;
             KeepOnTop();             // backstop: a tiling WM can push a window above us with no focus change
             PruneStaleMinimized();       // drop previews of windows that were closed while minimized
             if (!IsSecondary)
                 CheckAndPromptNewPins(); // reliable poll for new taskbar pins (the folder watcher often doesn't fire on Win11)
+            if (FrameProbe.Enabled)
+                FrameProbe.Note($"tick refresh={Us(t0, t1) / 1000.0:F1}ms fs={Us(t1, t2) / 1000.0:F1}ms " +
+                                $"top+pin={Us(t2) / 1000.0:F1}ms");
         };
+
+        if (FrameProbe.Enabled)
+        {
+            // Probe-only UI-stall watchdog. A DispatcherTimer can only run while the UI thread is free,
+            // so a tick that lands late by N ms measures exactly the freeze the dock just went through.
+            // Lets a "start a game and watch the dock jank" run name the stall instead of guessing.
+            _stallWatch = new DispatcherTimer(DispatcherPriority.Send) { Interval = TimeSpan.FromMilliseconds(100) };
+            _stallWatch.Tick += (_, _) =>
+            {
+                long now = Stopwatch.GetTimestamp();
+                if (_lastWatchTs != 0)
+                {
+                    double ms = Us(_lastWatchTs, now) / 1000.0;
+                    if (ms > 120)
+                        FrameProbe.Note($"stall {ms:F0}ms");
+                }
+                _lastWatchTs = now;
+            };
+            _stallWatch.Start();
+        }
 
         _previewDwellTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(PreviewDwellMs) };
         _previewDwellTimer.Tick += OnPreviewDwellElapsed;
@@ -371,6 +401,9 @@ public partial class DockWindow : Window
             Resources["RunningDotBrush"] = UiBrushes.Frozen("#CCFFFFFF"); // rgba(255,255,255,0.8)
             Resources["FallbackBgBrush"] = UiBrushes.Frozen("#33FFFFFF");
             Resources["FallbackTextBrush"] = UiBrushes.Frozen("#FFFFFFFF");
+            Resources["WindowCardBgBrush"] = UiBrushes.Frozen("#F22C2C32");
+            Resources["WindowCardBorderBrush"] = UiBrushes.Frozen("#33FFFFFF");
+            Resources["WindowCardBandBrush"] = UiBrushes.Frozen("#FF3C3C46");
             Resources["LabelBgBrush"] = UiBrushes.Frozen("#F22A2A30");
             Resources["LabelBorderBrush"] = UiBrushes.Frozen("#33FFFFFF");
             Resources["LabelTextBrush"] = UiBrushes.Frozen("#FFF2F2F2");
@@ -387,6 +420,9 @@ public partial class DockWindow : Window
             Resources["RunningDotBrush"] = UiBrushes.Frozen("#B3000000"); // rgba(0,0,0,0.7)
             Resources["FallbackBgBrush"] = UiBrushes.Frozen("#1F000000");
             Resources["FallbackTextBrush"] = UiBrushes.Frozen("#CC000000");
+            Resources["WindowCardBgBrush"] = UiBrushes.Frozen("#F2FBFDFF");
+            Resources["WindowCardBorderBrush"] = UiBrushes.Frozen("#33000000");
+            Resources["WindowCardBandBrush"] = UiBrushes.Frozen("#FFE4EAF2");
             Resources["LabelBgBrush"] = UiBrushes.Frozen("#F2F7F7FA");
             Resources["LabelBorderBrush"] = UiBrushes.Frozen("#22000000");
             Resources["LabelTextBrush"] = UiBrushes.Frozen(UiBrushes.InkHex);
@@ -448,19 +484,41 @@ public partial class DockWindow : Window
     /// being produced: the three per-icon shadow effects (outer, inner, thumbnail badge) are dropped
     /// and icon scaling falls back to linear. An effect on an element whose size changes every frame
     /// is re-blurred every frame — measured at ~38 ms of CPU per presented frame on a 4K @150% layered
-    /// window, which is why the magnification ran at ~15 fps. Once everything settles the full look
+    /// window, which is why the magnification ran at ~15 fps. Once the icons stand still the full look
     /// comes back (shadows, and bicubic scaling — linear is visibly aliased on resting icons).</summary>
     private void ApplyAnimationQuality(bool animating)
     {
-        Resources["IconOuterShadowEffect"] = animating ? null : _restingOuterIconShadow;
-        Resources["IconInnerShadowEffect"] = animating ? null : _restingInnerIconShadow;
-        Resources["IconOverlayShadowEffect"] = animating ? null : _restingOverlayIconShadow;
-        // The bar's box-shadow is a 30px software blur on an element whose WIDTH changes every magnify
-        // frame, so WPF re-blurs the bar per frame. The previous build tightened it to 12px and measured
-        // 11-12ms per frame; this build leaves the original XAML kernel untouched so both are comparable.
-        RenderOptions.SetBitmapScalingMode(this, animating
-            ? BitmapScalingMode.Linear
-            : BitmapScalingMode.HighQuality);
+        if (animating)
+            SuspendPerFrameQuality();
+        else
+            RestoreSettledQuality();
+    }
+
+    private bool _perFrameQualitySuspended;
+
+    /// <summary>Drops the per-icon shadows and the bicubic icon scaling for the duration of the
+    /// animation. Idempotent, so the loop can call it every frame.</summary>
+    private void SuspendPerFrameQuality()
+    {
+        if (_perFrameQualitySuspended)
+            return;
+        _perFrameQualitySuspended = true;
+        Resources["IconOuterShadowEffect"] = null;
+        Resources["IconInnerShadowEffect"] = null;
+        Resources["IconOverlayShadowEffect"] = null;
+        RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.Linear);
+    }
+
+    /// <summary>Puts the resting shadows and bicubic icon scaling back. Idempotent.</summary>
+    private void RestoreSettledQuality()
+    {
+        if (!_perFrameQualitySuspended)
+            return;
+        _perFrameQualitySuspended = false;
+        Resources["IconOuterShadowEffect"] = _restingOuterIconShadow;
+        Resources["IconInnerShadowEffect"] = _restingInnerIconShadow;
+        Resources["IconOverlayShadowEffect"] = _restingOverlayIconShadow;
+        RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
     }
 
     private static DropShadowEffect FrozenInnerIconShadow(double opacity)
@@ -889,6 +947,13 @@ public partial class DockWindow : Window
             || FanPopup.IsOpen || _preview?.IsVisible == true)
             return;
         RaiseToTop();
+    }
+
+    /// <summary>Microseconds between two stopwatch timestamps (<paramref name="to"/> = now when 0).</summary>
+    private static double Us(long from, long to = 0)
+    {
+        long end = to == 0 ? Stopwatch.GetTimestamp() : to;
+        return (end - from) * 1_000_000.0 / Stopwatch.Frequency;
     }
 
     /// <summary>How far from the docked edge (physical px) counts as "reaching for the dock". A trigger
@@ -2744,6 +2809,7 @@ public partial class DockWindow : Window
                 // Tile mode: a standalone minimized tile, showing the app's icon in place of a thumbnail.
                 // These were already minimized before launch — show them at once (no grow-in animation).
                 var tile = ViewModel.AddMinimizedWindow(hwnd, appVm?.Icon, TaskbarApps.GetWindowTitle(hwnd), animate: false);
+                tile.IsPreviewless = true; // no capture exists for a window that was already iconic
                 if (tile.Icon is null)
                     LoadTileIconFromApp(tile, hwnd);
             }
@@ -2768,6 +2834,7 @@ public partial class DockWindow : Window
         }
 
         var tile = ViewModel.AddMinimizedWindow(hwnd, appVm?.Icon, TaskbarApps.GetWindowTitle(hwnd), animate: false);
+        tile.IsPreviewless = true;  // no window image — render it as a window card, not a bigger icon
         LoadTileIconFromApp(tile, hwnd);
         LoadOverlayIcon(tile, hwnd);
     }
@@ -3041,10 +3108,23 @@ public partial class DockWindow : Window
             });
         }
 
-        if (!animating && !_hovering && GlassSpecularSettled())
+        // The loop keeps running after the magnification stops — it waits for the glass glint to ease
+        // home, which takes a few hundred ms. Restoring the icon shadows only at unhook left the icons
+        // landed and flat for that tail, then the shadow popped in. Give them back the moment nothing
+        // is moving: any static icon then carries a static effect, so it is rasterized once, not per frame.
+        if (_hovering || animating)
         {
-            UnhookRendering();
-            ApplyIdleRegion(); // settled at rest → clip back to the bar so the overflow is click-through
+            SuspendPerFrameQuality();
+        }
+        else
+        {
+            RestoreSettledQuality();
+
+            if (GlassSpecularSettled())
+            {
+                UnhookRendering();
+                ApplyIdleRegion(); // settled at rest → clip back to the bar so the overflow is click-through
+            }
         }
     }
 
@@ -3717,6 +3797,13 @@ public partial class DockWindow : Window
         FanCanvas.Width = labelExtent + FanIconSize + FanArcPerSlot * (slots - 1) * (slots - 1) + 32;
         FanCanvas.Height = fanHeight;
 
+        // Every row rotates, rises and fades at once. Uncached, WPF re-rasterizes each row's rotated
+        // label, runs its icon back through a bicubic resample and re-blurs its 8 px drop shadow at
+        // every frame of that 280 ms — eleven of those in flight is the stutter on open. A bitmap cache
+        // per row makes the animation transform one already-rasterized bitmap; the cache is dropped
+        // once the rows land so the labels go back to crisp sub-pixel rendering.
+        CacheDuringAnimation(rows, (slots - 1) * 18 + 320);
+
         // Anchor the icon column over the tile (labels extend left of it). Vertically, the first
         // (bottom) fan icon's bottom edge sits 20px above the top of a fully-magnified dock icon,
         // so the fan clears the folder tile even at full magnification.
@@ -3766,6 +3853,14 @@ public partial class DockWindow : Window
             return;
         _fanClosing = true;
         Mouse.Capture(null); // give input back immediately; the retraction is purely visual
+
+        // The retraction animates the same rows (fan) or the same balloon (grid), so re-cache them: the
+        // opening dropped the cache on landing, and without it every closing frame re-rasterizes rotated
+        // labels, bicubic-resampled icons and their shadows again. Deliberately never cleared — these
+        // elements are discarded when the next fan opens.
+        foreach (UIElement child in FanCanvas.Children)
+            if (child is FrameworkElement { CacheMode: null } element)
+                element.CacheMode = new BitmapCache();
 
         double totalMs;
         if (_fanIsGrid)
@@ -4001,6 +4096,25 @@ public partial class DockWindow : Window
         return brush;
     }
 
+    /// <summary>Rasterizes an animated subtree once and lets the animation transform that bitmap,
+    /// instead of re-rasterizing text, icons and drop shadows at every intermediate scale/rotation. The
+    /// cache is dropped when the animation ends, so resting content renders normally (cached text loses
+    /// sub-pixel anti-aliasing, which is invisible while it moves but not at rest).</summary>
+    private void CacheDuringAnimation(IReadOnlyList<FrameworkElement> elements, double ms)
+    {
+        foreach (var element in elements)
+            element.CacheMode = new BitmapCache();
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ms) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            foreach (var element in elements)
+                element.CacheMode = null; // one re-render at rest, then dropped from the frame budget
+        };
+        timer.Start();
+    }
+
     /// <summary>A fan item's shell icon (loaded async so the fan opens instantly).</summary>
     private static UIElement BuildFanItemIcon(string path)
     {
@@ -4150,6 +4264,10 @@ public partial class DockWindow : Window
         };
         scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
         scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
+
+        // Same reason as the fan: the balloon pops from 0.15 to 1 over 220 ms, and every frame of that
+        // re-rasterizes the whole grid (each cell's 94 px shell icon plus its wrapped file name).
+        CacheDuringAnimation(new[] { root }, 260);
 
         // Centered over the tile, its bottom 20px above the top of a fully-magnified dock icon.
         FanPopup.HorizontalOffset = item.X + item.RenderWidth / 2 - width / 2;

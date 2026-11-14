@@ -52,12 +52,14 @@ public sealed partial class DockItemViewModel : ObservableObject
     public bool CanUnpin => IsTaskbarApp && IsPinned;
 
     /// <summary>True for items that show an icon/thumbnail (and a loading fallback). The Start
-    /// tile joins in only while a custom icon is loaded — otherwise it renders its vector glyph.</summary>
+    /// tile joins in only while a custom icon is loaded — otherwise it renders its vector glyph.
+    /// Preview-less minimized tiles opt out: they draw a window card around their icon instead.</summary>
     public bool ShowIconArea =>
-        Model.Kind is DockItemKind.Shortcut or DockItemKind.MinimizedWindow
-            or DockItemKind.TaskbarApp or DockItemKind.RecycleBin
-            or DockItemKind.PinnedFolder or DockItemKind.PinnedFile
-        || (IsStartMenu && Icon is not null);
+        !IsPreviewless
+        && (Model.Kind is DockItemKind.Shortcut or DockItemKind.MinimizedWindow
+                or DockItemKind.TaskbarApp or DockItemKind.RecycleBin
+                or DockItemKind.PinnedFolder or DockItemKind.PinnedFile
+            || (IsStartMenu && Icon is not null));
 
     /// <summary>Whether the Start tile's built-in launcher glyph shows (hidden while a user-chosen
     /// custom icon is loaded into <see cref="Icon"/>).</summary>
@@ -113,8 +115,22 @@ public sealed partial class DockItemViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ShowOverlayIcon))]
     private ImageSource? _overlayIcon;
 
-    /// <summary>Whether the app-icon overlay should render (a minimized tile with a loaded icon).</summary>
-    public bool ShowOverlayIcon => IsMinimizedWindow && OverlayIcon is not null;
+    /// <summary>Whether the app-icon overlay should render (a minimized tile with a loaded icon).
+    /// A preview-less tile already shows its icon inside the window card, so it never doubles up.</summary>
+    public bool ShowOverlayIcon => IsMinimizedWindow && OverlayIcon is not null && !IsPreviewless;
+
+    /// <summary>A minimized-window tile adopted with no capture of the window (it was minimized out
+    /// of the dock's sight — Win+D, a batch minimize, or it was already iconic at launch). It has no
+    /// thumbnail to show, so it renders as a window card carrying the app icon rather than as a
+    /// bare, magnified copy of the app icon.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowIconArea))]
+    [NotifyPropertyChangedFor(nameof(ShowOverlayIcon))]
+    [NotifyPropertyChangedFor(nameof(ShowWindowCard))]
+    private bool _isPreviewless;
+
+    /// <summary>Whether the window-card visual replaces the plain image for this tile.</summary>
+    public bool ShowWindowCard => IsMinimizedWindow && IsPreviewless;
 
     // --- Magnification state (driven per-frame by the layout engine) ---
 
