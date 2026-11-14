@@ -448,6 +448,30 @@ public sealed class DockLayoutEngine
             }
 
             PlaceItem(item, mainPos, renderAlong, renderCross, nearDepth);
+
+            // Resting container box + the per-frame transform that carries the growth (see
+            // DockItemViewModel.VisualScale): a magnify frame then touches a scale matrix instead of
+            // re-measuring and re-rasterizing every icon, which is what capped the frame rate.
+            double restAlong = item.IsSeparator ? SeparatorHitArea : BaseCell(item) * IconFill;
+            double restCross = item.IsSeparator
+                ? _baseSize + 2 * (VPad - SeparatorEndInset)
+                : _baseSize * IconFill;
+            double visualScale = item.CurrentScale * appear;
+            item.VisualScale = visualScale;
+            item.VisualInverseScale = visualScale > 0.01 ? 1.0 / visualScale : 1.0;
+            PlaceResting(item, mainPos + renderAlong / 2, cellCross, restAlong, restCross);
+            // Growth past the resting box: the hover label rides up with it, the running dot down (per
+            // edge) — both so they keep the pixel distance from the icon they have today.
+            double growth = (visualScale - 1.0) * restCross / 2.0;
+            item.LabelOffsetY = Edge == DockEdge.Bottom ? -growth : 0.0;
+            switch (Edge)
+            {
+                case DockEdge.Top: item.DotOffsetX = 0; item.DotOffsetY = -growth; break;
+                case DockEdge.Left: item.DotOffsetX = -growth; item.DotOffsetY = 0; break;
+                case DockEdge.Right: item.DotOffsetX = growth; item.DotOffsetY = 0; break;
+                default: item.DotOffsetX = 0; item.DotOffsetY = growth; break; // Bottom: down to the bar edge
+            }
+
             along += (cellAlong + Gap) * appear; // advance shrinks as the cell collapses
         }
 
@@ -460,6 +484,14 @@ public sealed class DockLayoutEngine
             double render = cell * IconFill;
             double nearDepth = EdgeMargin + (cell - render) / 2 + DragLift;
             PlaceItem(_dragItem!, mouseMain - render / 2, render, render, nearDepth);
+            // The dragged tile is scaled directly: its resting box is the base cell, the drag scale
+            // rides the same transform channel as the magnification.
+            _dragItem!.VisualScale = DragScale;
+            _dragItem!.VisualInverseScale = 1.0 / DragScale;
+            // DragLift rides the depth-cell argument: PlaceResting only uses it to centre the box, so
+            // widening it by 2·DragLift lifts the resting box by DragLift, as the live box above is.
+            PlaceResting(_dragItem!, mouseMain, _baseSize * DragScale + 2 * DragLift,
+                BaseCell(_dragItem!) * IconFill, _baseSize * IconFill);
             animating = true;
         }
 
@@ -501,6 +533,34 @@ public sealed class DockLayoutEngine
                 item.Y = mainStart; item.RenderSize = renderAlong;
                 item.RenderWidth = renderCross;
                 item.X = _crossWindow - nearDepth - renderCross;
+                break;
+        }
+    }
+
+    /// <summary>Publishes the item's RESTING container box — the size the template lays out at, which
+    /// stays put while the icon magnifies — centred on the same point as its live box.
+    /// <paramref name="centerMain"/> is the along-axis centre of the live box;
+    /// <paramref name="cellCross"/> is the (scale-grown) depth cell that centres the icon across the bar.</summary>
+    private void PlaceResting(DockItemViewModel item, double centerMain, double cellCross,
+                              double restAlong, double restCross)
+    {
+        double centerCross = Edge is DockEdge.Top or DockEdge.Left
+            ? EdgeMargin + cellCross / 2
+            : _crossWindow - EdgeMargin - cellCross / 2;
+
+        switch (Edge)
+        {
+            case DockEdge.Top:
+            case DockEdge.Bottom:
+                item.BoxWidth = restAlong; item.BoxHeight = restCross;
+                item.BoxLeft = centerMain - restAlong / 2;
+                item.BoxTop = centerCross - restCross / 2;
+                break;
+            case DockEdge.Left:
+            case DockEdge.Right:
+                item.BoxHeight = restAlong; item.BoxWidth = restCross;
+                item.BoxTop = centerMain - restAlong / 2;
+                item.BoxLeft = centerCross - restCross / 2;
                 break;
         }
     }
