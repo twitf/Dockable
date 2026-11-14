@@ -410,13 +410,13 @@ public partial class DockWindow : Window
         AcrylicNoise.Visibility = acrylic && transparency ? Visibility.Visible : Visibility.Collapsed;
 
         // Icon drop-shadows are shared, swappable effects: dropped entirely in reduced/Performance mode,
-        // and dropped while the render loop runs (see ApplyIconShadows) — a software-blurred effect is
+        // and dropped while the render loop runs (see ApplyAnimationQuality) — a software-blurred effect is
         // re-rasterized every frame the icon's size changes, and three of them per icon is what capped
         // the magnification at ~15 fps on a 4K panel.
         _restingOuterIconShadow = PerformanceProfile.ReduceIconShadows ? null : FrozenOuterIconShadow(dark ? 0.12 : 0.10);
         _restingInnerIconShadow = PerformanceProfile.ReduceIconShadows ? null : FrozenInnerIconShadow(dark ? 0.18 : 0.14);
         _restingOverlayIconShadow = PerformanceProfile.ReduceIconShadows ? null : FrozenOverlayIconShadow();
-        ApplyIconShadows(_renderingHooked);
+        ApplyAnimationQuality(_renderingHooked);
 
         // Windows 11-style context menus (Themes/ModernMenu.xaml) live at APPLICATION scope so
         // every menu follows the theme — the dock's, the tray's, and the menu bar's alike.
@@ -444,16 +444,20 @@ public partial class DockWindow : Window
     }
 
     /// <summary>Builds the (frozen, shared) outer icon drop-shadow at the given opacity.</summary>
-    /// <summary>Swaps the three per-icon shadow effects (outer, inner, thumbnail badge) off while the
-    /// render loop is hooked, and restores them once everything settles. An effect on an element whose
-    /// size changes every frame is re-blurred every frame — measured at ~38 ms of CPU per presented
-    /// frame on a 4K @150% layered window, which is why the magnification ran at ~15 fps. While the bar
-    /// is in motion those blurs are moving anyway; at rest the look is exactly as before.</summary>
-    private void ApplyIconShadows(bool animating)
+    /// <summary>Switches the dock's per-frame visual quality for the render loop. While frames are
+    /// being produced: the three per-icon shadow effects (outer, inner, thumbnail badge) are dropped
+    /// and icon scaling falls back to linear. An effect on an element whose size changes every frame
+    /// is re-blurred every frame — measured at ~38 ms of CPU per presented frame on a 4K @150% layered
+    /// window, which is why the magnification ran at ~15 fps. Once everything settles the full look
+    /// comes back (shadows, and bicubic scaling — linear is visibly aliased on resting icons).</summary>
+    private void ApplyAnimationQuality(bool animating)
     {
         Resources["IconOuterShadowEffect"] = animating ? null : _restingOuterIconShadow;
         Resources["IconInnerShadowEffect"] = animating ? null : _restingInnerIconShadow;
         Resources["IconOverlayShadowEffect"] = animating ? null : _restingOverlayIconShadow;
+        RenderOptions.SetBitmapScalingMode(this, animating
+            ? BitmapScalingMode.Linear
+            : BitmapScalingMode.HighQuality);
     }
 
     private static DropShadowEffect FrozenInnerIconShadow(double opacity)
@@ -3018,7 +3022,7 @@ public partial class DockWindow : Window
     {
         if (_renderingHooked)
             return;
-        ApplyIconShadows(true);        // no per-frame re-blur while frames are being produced
+        ApplyAnimationQuality(true);   // no per-frame re-blur, no per-frame bicubic, while frames run
         CompositionTarget.Rendering += OnRendering;
         _renderingHooked = true;
     }
@@ -3029,7 +3033,7 @@ public partial class DockWindow : Window
             return;
         CompositionTarget.Rendering -= OnRendering;
         _renderingHooked = false;
-        ApplyIconShadows(false);       // settled: the full look comes back
+        ApplyAnimationQuality(false);  // settled: full quality comes back
         _lastRenderTime = TimeSpan.Zero; // next hook starts a fresh frame-delta clock (nominal first step)
     }
 

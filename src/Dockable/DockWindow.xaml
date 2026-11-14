@@ -118,9 +118,11 @@
                     <Grid.RenderTransform>
                         <TranslateTransform X="{Binding BounceX}" Y="{Binding BounceY}" />
                     </Grid.RenderTransform>
+                    <!-- Scaling quality is NOT set here: it inherits from the window, which switches to
+                         Linear only while the render loop runs (HighQuality is a software bicubic pass
+                         per frame, but its aliasing is visible on the resting icons). -->
                     <Image Source="{Binding Icon}"
                            Stretch="Uniform"
-                           RenderOptions.BitmapScalingMode="Linear"
                            Effect="{DynamicResource IconInnerShadowEffect}" />
                 </Grid>
 
@@ -147,7 +149,6 @@
                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
                        Margin="0,0,1,1"
                        Stretch="Uniform"
-                       RenderOptions.BitmapScalingMode="Linear"
                        Effect="{DynamicResource IconOverlayShadowEffect}"
                        Visibility="{Binding ShowOverlayIcon, Converter={StaticResource BoolToVis}}" />
 
