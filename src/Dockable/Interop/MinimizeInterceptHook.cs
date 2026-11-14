@@ -69,7 +69,6 @@ public sealed class MinimizeInterceptHook : IDisposable
     private bool _winMArmed;
     private bool _winDArmed;
     private bool _snipArmed;
-    private bool _winComboSwallowed;
 
     // The window whose minimize-button press we swallowed; the release decides whether to minimize it.
     private IntPtr _armedMinimize;
@@ -254,31 +253,12 @@ public sealed class MinimizeInterceptHook : IDisposable
             bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
             bool up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
 
-            if (data.vkCode == VK_LWIN || data.vkCode == VK_RWIN)
-            {
-                // A combo we take over (Win+D / Win+M / Win+Down) swallows only its letter key, so the
-                // shell still sees the Win key go down and come back up with nothing in between — a lone
-                // Win tap, which pops the Start menu on top of the desktop we just revealed. Swallow the
-                // Win release when the press actually drove one of our combos.
-                if (up)
-                {
-                    bool swallowed = _winComboSwallowed;
-                    _winComboSwallowed = false;
-                    if (swallowed)
-                        return new LRESULT(1);
-                }
-                else if (down)
-                {
-                    _winComboSwallowed = false;
-                }
-            }
-            else if (data.vkCode == VK_DOWN)
+            if (data.vkCode == VK_DOWN)
             {
                 if (up) _winDownArmed = false;
                 else if (down && !_winDownArmed && WinHeld() && InterceptEnabled() && TryMinimizeForeground())
                 {
                     _winDownArmed = true;
-                    _winComboSwallowed = true;
                     return new LRESULT(1); // handled Win+Down ourselves
                 }
             }
@@ -288,7 +268,6 @@ public sealed class MinimizeInterceptHook : IDisposable
                 else if (down && !_winMArmed && WinHeld() && InterceptEnabled())
                 {
                     _winMArmed = true;
-                    _winComboSwallowed = true;
                     MinimizeAllRequested?.Invoke();
                     return new LRESULT(1); // handled Win+M ourselves
                 }
@@ -299,7 +278,6 @@ public sealed class MinimizeInterceptHook : IDisposable
                 else if (down && !_winDArmed && WinHeld() && InterceptEnabled())
                 {
                     _winDArmed = true;
-                    _winComboSwallowed = true;
                     ShowDesktopRequested?.Invoke();
                     return new LRESULT(1); // handled Win+D (show desktop) ourselves
                 }
