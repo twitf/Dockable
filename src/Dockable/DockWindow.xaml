@@ -94,6 +94,11 @@
                      DockItemViewModel.VisualScale). Everything icon-like lives inside; the running dot
                      and the hover label stay outside so text and the 4px dot never get stretched. -->
                 <Grid>
+                    <!-- Origin MUST be the box centre: PlaceResting centres this rest box on the live
+                         box's centre (BoxLeft = centre - restAlong/2). WPF defaults the origin to the
+                         top-left corner, which made the magnification grow right/down from the icon's
+                         left edge instead of outward from its middle. -->
+                    <Grid.RenderTransformOrigin>0.5,0.5</Grid.RenderTransformOrigin>
                     <Grid.RenderTransform>
                         <ScaleTransform ScaleX="{Binding VisualScale}" ScaleY="{Binding VisualScale}" />
                     </Grid.RenderTransform>
