@@ -47,6 +47,11 @@
              BlurRadius=20 pass (the biggest per-magnify-frame GPU cost). ApplyTheme() sets it per theme,
              or null when effects are reduced. -->
         <DropShadowEffect x:Key="IconOuterShadowEffect" BlurRadius="20" ShadowDepth="10" Direction="270" Opacity="0.10" Color="#000000" />
+        <!-- Icon shadows are DynamicResources so the dock can drop them while the render loop runs: an
+             effect on an element whose size changes every frame is re-blurred every frame, in software
+             (layered window). Replaced from code per theme (and by Performance mode). -->
+        <DropShadowEffect x:Key="IconInnerShadowEffect" BlurRadius="8" ShadowDepth="4" Direction="270" Opacity="0.14" Color="#000000" RenderingBias="Performance" />
+        <DropShadowEffect x:Key="IconOverlayShadowEffect" BlurRadius="4" ShadowDepth="0" Opacity="0.7" Color="#000000" RenderingBias="Performance" />
 
         <!-- One dock entry: Start logo for the Start item, otherwise an extracted icon.
              The container is sized/positioned by the layout engine (Width/Height/Canvas.Left/Top). -->
@@ -115,11 +120,8 @@
                     </Grid.RenderTransform>
                     <Image Source="{Binding Icon}"
                            Stretch="Uniform"
-                           RenderOptions.BitmapScalingMode="Linear">
-                        <Image.Effect>
-                            <DropShadowEffect BlurRadius="8" ShadowDepth="4" Direction="270" Opacity="{DynamicResource IconShadowInnerOpacity}" Color="#000000" RenderingBias="Performance" />
-                        </Image.Effect>
-                    </Image>
+                           RenderOptions.BitmapScalingMode="Linear"
+                           Effect="{DynamicResource IconInnerShadowEffect}" />
                 </Grid>
 
                 <!-- Fallback while a shortcut icon is still loading -->
@@ -145,12 +147,9 @@
                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
                        Margin="0,0,1,1"
                        Stretch="Uniform"
-                       RenderOptions.BitmapScalingMode="HighQuality"
-                       Visibility="{Binding ShowOverlayIcon, Converter={StaticResource BoolToVis}}">
-                    <Image.Effect>
-                        <DropShadowEffect BlurRadius="4" ShadowDepth="0" Opacity="0.7" Color="#000000" />
-                    </Image.Effect>
-                </Image>
+                       RenderOptions.BitmapScalingMode="Linear"
+                       Effect="{DynamicResource IconOverlayShadowEffect}"
+                       Visibility="{Binding ShowOverlayIcon, Converter={StaticResource BoolToVis}}" />
 
                 <!-- Running indicator: a dot on the screen-edge side of the icon for open taskbar apps
                      (below for Bottom, above for Top, beside for Left/Right) — orientation from the VM. -->
