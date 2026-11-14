@@ -53,6 +53,7 @@ public partial class DockWindow : Window
     private DropShadowEffect? _restingOuterIconShadow;
     private DropShadowEffect? _restingInnerIconShadow;
     private DropShadowEffect? _restingOverlayIconShadow;
+    private DropShadowEffect? _restingBarShadow;
     private TimeSpan _lastRenderTime; // last processed OnRendering frame, for the frame-rate cap
     // Last acrylic/capture rect pushed to native (device px + corner), to skip no-op SetWindowPos/SetRect
     // on the many render frames where the bar geometry hasn't actually changed.
@@ -416,6 +417,7 @@ public partial class DockWindow : Window
         _restingOuterIconShadow = PerformanceProfile.ReduceIconShadows ? null : FrozenOuterIconShadow(dark ? 0.12 : 0.10);
         _restingInnerIconShadow = PerformanceProfile.ReduceIconShadows ? null : FrozenInnerIconShadow(dark ? 0.18 : 0.14);
         _restingOverlayIconShadow = PerformanceProfile.ReduceIconShadows ? null : FrozenOverlayIconShadow();
+        _restingBarShadow = BarShadow;      // keep the instance: AnimationQuality detaches it per frame
         ApplyAnimationQuality(_renderingHooked);
 
         // Windows 11-style context menus (Themes/ModernMenu.xaml) live at APPLICATION scope so
@@ -455,6 +457,10 @@ public partial class DockWindow : Window
         Resources["IconOuterShadowEffect"] = animating ? null : _restingOuterIconShadow;
         Resources["IconInnerShadowEffect"] = animating ? null : _restingInnerIconShadow;
         Resources["IconOverlayShadowEffect"] = animating ? null : _restingOverlayIconShadow;
+        // The bar's box-shadow is a 30px software blur sitting on an element whose WIDTH changes every
+        // magnify frame, so WPF recomputed it per frame — the same trap as the icon shadows, on a much
+        // bigger surface. Dropped while the loop runs, restored the moment the dock settles.
+        DockBackground.Effect = animating ? null : _restingBarShadow;
         RenderOptions.SetBitmapScalingMode(this, animating
             ? BitmapScalingMode.Linear
             : BitmapScalingMode.HighQuality);
