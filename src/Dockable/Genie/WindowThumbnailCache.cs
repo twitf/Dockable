@@ -33,12 +33,17 @@ public sealed class WindowThumbnailCache : IDisposable
     private readonly DispatcherTimer _timer;
     private readonly DispatcherTimer _settleTimer;
     private readonly uint _ownProcessId;
+    private readonly Dispatcher _ui;
+    private readonly object _gate = new();
+    private bool _capturing;
+    private bool _disposed;
 
     public WindowThumbnailCache()
     {
         _hook = new WinEventHook(PInvoke.EVENT_SYSTEM_FOREGROUND, PInvoke.EVENT_SYSTEM_FOREGROUND,
             OnForeground, PInvoke.WINEVENT_OUTOFCONTEXT | PInvoke.WINEVENT_SKIPOWNPROCESS);
         _ownProcessId = (uint)Environment.ProcessId;
+        _ui = Dispatcher.CurrentDispatcher;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(RefreshMs) };
         _timer.Tick += (_, _) => CaptureForeground();
         _settleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(FocusSettleMs) };
@@ -81,21 +86,59 @@ public sealed class WindowThumbnailCache : IDisposable
     private void CaptureForeground()
     {
         if (ShouldSuspend?.Invoke() == true)
-            return; // a warp is animating — don't stall its frames with a full-window BitBlt
-        Capture(PInvoke.GetForegroundWindow());
+            return; // a warp is animating, or the dock is itself animating — don't read back now
+        BeginCapture(PInvoke.GetForegroundWindow());
     }
 
-    private void Capture(HWND hwnd)
+    /// <summary>
+    /// Runs the screen read-back on a worker thread. Measured on a 4K @150% desktop, one capture of a
+    /// maximised window costs <b>100-400 ms</b> — as a DispatcherTimer handler that was a dead freeze of
+    /// the UI thread, which is exactly the stutter this cache injected into the dock's own animation.
+    /// The result is built and frozen on the worker, then handed back to the dock's thread to store.
+    /// </summary>
+    private void BeginCapture(HWND hwnd)
     {
         if (!WindowFilter.IsEligibleAppWindow(hwnd, _ownProcessId))
             return;
 
-        long started = FrameProbe.Enabled ? Stopwatch.GetTimestamp() : 0;
-        var result = WindowCapture.Capture((IntPtr)hwnd);
-        if (FrameProbe.Enabled)
-            FrameProbe.RecordReadback(started);
-        if (result is not null)
-            Store((IntPtr)hwnd, result.Value);
+        lock (_gate)
+        {
+            if (_capturing || _disposed)
+                return; // one read-back in flight; a skipped refresh is just a slightly older image
+            _capturing = true;
+        }
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            long started = FrameProbe.Enabled ? Stopwatch.GetTimestamp() : 0;
+            WindowCapture.Result? captured = null;
+            try
+            {
+                captured = WindowCapture.Capture((IntPtr)hwnd);
+            }
+            catch
+            {
+                // A failed capture keeps the previous entry; it must never take the dock down.
+            }
+            finally
+            {
+                if (FrameProbe.Enabled)
+                    FrameProbe.RecordReadback(started);
+            }
+
+            var result = captured;
+            _ = _ui.InvokeAsync(() =>
+            {
+                lock (_gate)
+                {
+                    _capturing = false;
+                    if (_disposed)
+                        return;
+                    if (result is not null)
+                        Store((IntPtr)hwnd, result);
+                }
+            });
+        });
     }
 
 
@@ -116,6 +159,9 @@ public sealed class WindowThumbnailCache : IDisposable
 
     public void Dispose()
     {
+        lock (_gate)
+            _disposed = true; // a capture still in flight drops its result instead of storing it
+
         _timer.Stop();
         _settleTimer.Stop();
 
